@@ -1,0 +1,22 @@
+# Генерируется init.sh, публиковать нельзя (см. README "Состав комплекта")
+config/secret.hex
+config/worker_auth
+config/token.key
+config/profiles.json
+config/config.json
+config/base_path
+config/mtproto_secret.hex
+config/socks5_pass.hex
+config/socks5_user
+config/admin_path
+config/panel_token
+site/admin/index.html
+.env
+remote/certs/
+certs/
+
+# Прочее
+*.log
+__pycache__/
+panel-admin/panel-admin
+certs/

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NodeSentry — панель</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161c24;
+    --border: #2a333f;
+    --text: #d6e0ea;
+    --text-dim: #7c8a9a;
+    --accent: #3b9dff;
+    --ok: #3ecf8e;
+    --warn: #e8b339;
+    --err: #e85d5d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 28px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .card h2 { font-size: 15px; }
+  .status { font-size: 12px; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .status.ok { color: var(--ok); }
+  .status.off { color: var(--text-dim); }
+  .status.pending { color: var(--warn); }
+  .status.err { color: var(--err); }
+  .spinner {
+    width: 11px; height: 11px;
+    border: 2px solid var(--border);
+    border-top-color: var(--warn);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .link-box {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--accent);
+    word-break: break-all;
+    margin-bottom: 10px;
+    min-height: 16px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    display: inline-block;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #0a0d12;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+  }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.danger { background: var(--err); color: #0a0d12; }
+  input[type=text] {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    width: 140px;
+  }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+  .switch {
+    position: relative; width: 40px; height: 22px; flex-shrink: 0;
+    background: var(--border); border-radius: 11px; cursor: pointer; border: none;
+    transition: background 0.15s;
+  }
+  .switch.on { background: var(--ok); }
+  .switch.pending { background: var(--warn); cursor: wait; }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%; background: #fff;
+    transition: left 0.15s;
+  }
+  .switch.on::after { left: 20px; }
+  .fields { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: none; }
+  .fields.show { display: flex; }
+  .cmd {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    overflow-x: auto;
+  }
+  footer { color: var(--text-dim); font-size: 11px; margin-top: 24px; text-align: center; }
+  .qr {
+    width: 140px; height: 140px;
+    border-radius: 8px;
+    background: #fff;
+    padding: 6px;
+    display: none;
+    flex-shrink: 0;
+  }
+  .qr.show { display: block; }
+  .link-row { display: flex; gap: 12px; align-items: center; }
+  .link-col { flex: 1; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Панель подключения</h1>
+  <div class="sub">__HOSTNAME__ · обновлено при открытии страницы</div>
+
+  <div class="card" id="diag-card">
+    <div class="card-head"><h2>Диагностика</h2></div>
+    <div class="row" style="justify-content: space-between; margin-bottom: 6px;">
+      <span style="font-size: 13px;">Cloudflare Worker</span>
+      <span class="status" id="diag-cf" style="margin-bottom:0;">…</span>
+    </div>
+    <div class="row" style="justify-content: space-between;">
+      <span style="font-size: 13px;">Telegram DC (через воркер)</span>
+      <span class="status" id="diag-dc" style="margin-bottom:0;">…</span>
+    </div>
+  </div>
+
+  <div class="card" data-proto="web">
+    <div class="card-head">
+      <h2>WEB-прокси (Telegram Desktop 7.1.1+, тип WEB)</h2>
+      <button class="switch on" data-switch="web"></button>
+    </div>
+    <div class="status ok" data-status="web">● активен</div>
+    <div class="link-row">
+      <div class="link-col">
+        <div class="link-box" id="web-link" data-link="web">__WEB_LINK__</div>
+      </div>
+      <img class="qr show" id="web-qr" src="__WEB_QR__" alt="QR">
+    </div>
+    <div class="row" id="web-actions">
+      <a class="btn" id="web-open" href="__WEB_OPEN__">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="web-link">Скопировать</button>
+      <button class="btn ghost" id="web-regen">Перевыпустить секрет</button>
+    </div>
+  </div>
+
+  <div class="card" data-proto="mtproto">
+    <div class="card-head">
+      <h2>MTProto (обычный прокси, fake-TLS)</h2>
+      <button class="switch __MTPROTO_SWITCH_ON__" data-switch="mtproto"></button>
+    </div>
+    <div class="status __MTPROTO_STATUS_CLASS__" data-status="mtproto">__MTPROTO_STATUS_TEXT__</div>
+    <div class="link-row">
+      <div class="link-col">
+        <div class="link-box" id="mtproto-link" data-link="mtproto">__MTPROTO_LINK__</div>
+      </div>
+      <img class="qr __MTPROTO_QR_CLASS__" id="mtproto-qr" src="__MTPROTO_QR_SRC__" alt="QR">
+    </div>
+    <div class="row" id="mtproto-actions" style="display:__MTPROTO_ACTIONS_STYLE__">
+      <a class="btn" id="mtproto-open" href="__MTPROTO_OPEN__">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="mtproto-link">Скопировать</button>
+      <button class="btn ghost" data-regen="mtproto">Перевыпустить секрет</button>
+    </div>
+    <div class="fields" id="mtproto-fields">
+      <label class="field">Порт<input type="text" id="mtproto-port" placeholder="8443"></label>
+      <label class="field">SNI (домен для маскировки)<input type="text" id="mtproto-sni" placeholder="www.google.com"></label>
+      <button class="btn" data-apply="mtproto" style="align-self:flex-end">Применить и включить</button>
+    </div>
+  </div>
+
+  <div class="card" data-proto="socks5">
+    <div class="card-head">
+      <h2>SOCKS (общий туннель, логин/пароль)</h2>
+      <button class="switch __SOCKS5_SWITCH_ON__" data-switch="socks5"></button>
+    </div>
+    <div class="status warn" style="color: var(--warn); margin-bottom: 10px;">
+      ⚠ Адрес назначения передаётся открытым текстом (так устроен сам протокол) --
+      провайдер может блокировать такой туннель именно к адресам Telegram. Для
+      обхода блокировок Telegram используйте WEB-прокси или MTProto выше, а этот
+      туннель -- для доступа внутри локальной сети/к обычным адресам.
+    </div>
+    <div class="status __SOCKS5_STATUS_CLASS__" data-status="socks5">__SOCKS5_STATUS_TEXT__</div>
+    <div class="row" id="socks5-localip-row" style="display:__SOCKS5_LOCALIP_ROW_STYLE__; margin-bottom: 10px; align-items: center; gap: 8px;">
+      <button class="switch __SOCKS5_LOCALIP_SWITCH_ON__" data-switch-localip="socks5"></button>
+      <span style="font-size: 12px; color: var(--text-dim);">Ссылка/QR с локальным IP (для своей сети) вместо домена</span>
+    </div>
+    <div class="link-row">
+      <div class="link-col">
+        <div class="link-box" id="socks5-link" data-link="socks5">__SOCKS5_LINK__</div>
+      </div>
+      <img class="qr __SOCKS5_QR_CLASS__" id="socks5-qr" src="__SOCKS5_QR_SRC__" alt="QR">
+    </div>
+    <div class="row" id="socks5-actions" style="display:__SOCKS5_ACTIONS_STYLE__">
+      <a class="btn" id="socks5-open" href="__SOCKS5_OPEN__">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="socks5-link">Скопировать</button>
+      <button class="btn ghost" data-regen="socks5">Новый пароль</button>
+    </div>
+    <div class="fields" id="socks5-fields">
+      <label class="field">Порт<input type="text" id="socks5-port" placeholder="8443"></label>
+      <label class="field">Логин<input type="text" id="socks5-user" placeholder="user"></label>
+      <label class="field">Пароль (пусто = сгенерировать)<input type="text" id="socks5-pass" placeholder=""></label>
+      <button class="btn" data-apply="socks5" style="align-self:flex-end">Применить и включить</button>
+    </div>
+  </div>
+
+  <footer>NodeSentry · __HOSTNAME__</footer>
+</div>
+<script>
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+function api(path, opts) {
+  return fetch('api/' + path, Object.assign({headers: {'Content-Type': 'application/json'}}, opts))
+    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t || r.status); }); return r.json(); });
+}
+
+function setStatus(proto, mode, text) {
+  const el = $('[data-status="' + proto + '"]');
+  if (!el) return;
+  el.className = 'status ' + mode;
+  el.innerHTML = (mode === 'pending' ? '<span class="spinner"></span> ' : '') + text;
+}
+
+function setField(proto, name, value) {
+  const el = $('#' + proto + '-' + name);
+  if (el && value) el.value = value;
+}
+
+function renderProto(proto, state) {
+  const sw = $('[data-switch="' + proto + '"]');
+  const linkBox = $('[data-link="' + proto + '"]');
+  const actions = $('#' + proto + '-actions');
+  const fields = $('#' + proto + '-fields');
+  const openBtn = $('#' + proto + '-open');
+  sw.classList.remove('pending');
+  sw.classList.toggle('on', !!state.enabled);
+  const qrImg = $('#' + proto + '-qr');
+  if (state.enabled && state.link) {
+    setStatus(proto, 'ok', '● активен' + (state.sni ? ', fake-TLS под ' + state.sni : ''));
+    linkBox.textContent = state.link;
+    if (actions) { actions.style.display = 'flex'; }
+    if (openBtn) openBtn.href = state.open || state.link;
+    if (fields) fields.classList.remove('show');
+    if (qrImg && state.qr) { qrImg.src = state.qr; qrImg.classList.add('show'); }
+  } else {
+    setStatus(proto, 'off', state.note || 'выключен');
+    if (linkBox) linkBox.textContent = '';
+    if (actions) actions.style.display = 'none';
+    if (qrImg) qrImg.classList.remove('show');
+  }
+  setField(proto, 'port', state.port);
+  setField(proto, 'sni', state.sni);
+  setField(proto, 'user', state.user);
+
+  if (proto === 'socks5') {
+    const row = $('#socks5-localip-row');
+    const lsw = $('[data-switch-localip="socks5"]');
+    if (row) row.style.display = state.localIpAvailable ? 'flex' : 'none';
+    if (lsw) { lsw.classList.remove('pending'); lsw.classList.toggle('on', !!state.localIpActive); }
+  }
+}
+
+function loadState() {
+  api('state', {method: 'GET'}).then(data => {
+    Object.keys(data).forEach(proto => {
+      if ($('[data-switch="' + proto + '"]')) renderProto(proto, data[proto]);
+    });
+  }).catch(() => {});
+}
+
+$$('.switch[data-switch]').forEach(sw => {
+  sw.addEventListener('click', () => {
+    const proto = sw.dataset.switch;
+    const turningOn = !sw.classList.contains('on');
+    if (turningOn) {
+      const fields = $('#' + proto + '-fields');
+      if (fields && !fields.classList.contains('show') && !$('[data-link="' + proto + '"]').textContent) {
+        fields.classList.add('show');
+        return; // сначала заполните порт/SNI, включение -- кнопкой "Применить"
+      }
+    }
+    doToggle(proto, turningOn, {});
+  });
+});
+
+$$('.switch[data-switch-localip]').forEach(sw => {
+  sw.addEventListener('click', () => {
+    const proto = sw.dataset.switchLocalip;
+    const turningOn = !sw.classList.contains('on');
+    sw.classList.add('pending');
+    api('socks5-local-ip', {method: 'POST', body: JSON.stringify({on: turningOn})})
+      .then(state => renderProto(proto, state))
+      .catch(err => { sw.classList.remove('pending'); });
+  });
+});
+
+function fieldVal(proto, name) {
+  const el = $('#' + proto + '-' + name);
+  return el ? el.value.trim() : '';
+}
+
+$$('[data-apply]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const proto = btn.dataset.apply;
+    doToggle(proto, true, {
+      port: fieldVal(proto, 'port'),
+      sni: fieldVal(proto, 'sni'),
+      user: fieldVal(proto, 'user'),
+      pass: fieldVal(proto, 'pass')
+    });
+  });
+});
+
+function doToggle(proto, on, extra) {
+  const sw = $('[data-switch="' + proto + '"]');
+  sw.classList.add('pending');
+  setStatus(proto, 'pending', on ? 'включение…' : 'выключение…');
+  api('toggle', {method: 'POST', body: JSON.stringify(Object.assign({proto, on}, extra))})
+    .then(state => renderProto(proto, state))
+    .catch(err => { sw.classList.remove('pending'); setStatus(proto, 'err', 'ошибка: ' + err.message); });
+}
+
+$$('[data-regen]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const proto = btn.dataset.regen;
+    btn.disabled = true;
+    setStatus(proto, 'pending', 'перевыпуск секрета…');
+    api('regen', {method: 'POST', body: JSON.stringify({proto})})
+      .then(() => loadState())
+      .catch(err => setStatus(proto, 'err', 'ошибка: ' + err.message))
+      .finally(() => { btn.disabled = false; });
+  });
+});
+
+$('#web-regen').addEventListener('click', () => {
+  const btn = $('#web-regen');
+  btn.disabled = true;
+  btn.textContent = 'Перевыпуск…';
+  api('regen', {method: 'POST', body: JSON.stringify({proto: 'web'})})
+    .then(data => {
+      $('#web-link').textContent = data.link;
+      $('#web-open').href = data.open || data.link;
+      if (data.qr) $('#web-qr').src = data.qr;
+    })
+    .catch(() => {})
+    .finally(() => { btn.disabled = false; btn.textContent = 'Перевыпустить секрет'; });
+});
+
+// Запасной способ для вебвью без (или с заблокированным) async Clipboard API --
+// самый частый случай: встроенный браузер Telegram Desktop при переходе по
+// ссылке панели прямо из клиента, а также просто открытие панели по HTTP
+// (без TLS navigator.clipboard вообще недоступен -- isSecureContext=false).
+function legacyCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
+  }
+  return Promise.resolve(legacyCopy(text));
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest && e.target.closest('[data-copy]');
+  if (!btn) return;
+  const box = $('#' + btn.dataset.copy);
+  const text = box && box.textContent;
+  if (!text) return;
+  const orig = btn.textContent;
+  copyText(text).then(ok => {
+    btn.textContent = ok ? 'Скопировано' : 'Не удалось скопировать';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  });
+});
+
+function renderDiag(s) {
+  const cf = $('#diag-cf'), dc = $('#diag-dc');
+  if (cf) { cf.className = 'status ' + (s.cfWorkerOk ? 'ok' : 'err'); cf.textContent = s.cfWorkerOk ? '● доступен' : '● недоступен'; }
+  if (dc) { dc.className = 'status ' + (s.tgDcOk ? 'ok' : 'err'); dc.textContent = s.tgDcOk ? '● доступен напрямую' : '● заблокирован провайдером'; }
+}
+function loadDiag() { api('status', {method: 'GET'}).then(renderDiag).catch(() => {}); }
+loadDiag();
+setInterval(loadDiag, 20000);
+
+loadState();
+</script>
+</body>
+</html>

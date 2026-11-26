@@ -1,0 +1,393 @@
+# УДАЛЁННЫЙ РЕЖИМ + ВЫХОД В TELEGRAM ЧЕРЕЗ CLOUDFLARE WORKER
+# Без главного NPM и без отдельного nginx-gateway -- публичный TLS и реверс-прокси
+# берёт на себя контейнеризованный Caddy (сервис caddy ниже). Весь стек целиком
+# в этом compose-файле, без единого host-level сервиса или скрипта -- именно
+# чтобы его можно было поднять на Synology DSM (там systemd-юниты и прочие
+# "системные" действия ставить свободно нельзя, а Docker/Container Manager --
+# можно) и в целом без ручных шагов на хосте вообще.
+#
+#   клиент ─https (443!)─▶ Caddy (TLS internal, самоподписанный -- перед нами
+#                    всё равно Cloudflare в режиме Full SSL, цепочку источника
+#                    он не проверяет; порт строго 443 -- у ссылки
+#                    t.me/webproxy?server=...&secret=... нет поля порта,
+#                    клиент Telegram всегда идёт туда, см. официальный
+#                    README tproxy-server: "HTTPS and port 443 are fixed by
+#                    the WEB proxy type") ─▶ 127.0.0.1:19443 (форвардер
+#                                              cover, см. ниже про network
+#                                              namespace)
+#                                              │
+#                                              ├─ /ADMIN_PATH/ ─▶ мини-панель
+#                                              └─ остальное ─▶ 127.0.0.1:18080 (relay)
+#                                                                   │ 127.0.0.1:2398
+#                                                                   ▼
+#                                         tg-ws-proxy (Flowseal) ─WS─▶ Telegram
+#                                                                   └─ если закрыто ─▶ ваш Worker на Cloudflare ─▶ Telegram
+#
+# Сайт-прикрытие отдаёт сам cover (127.0.0.1:13000, см. cover/main.go) --
+# relay's public_upstream настроен на этот же адрес (config/config.json.template).
+#
+# Сетевая топология: relay/cover/caddy ОБЯЗАНЫ делить network namespace с
+# tgws (network_mode: "service:tgws"). Для relay и cover это НЕ наш выбор,
+# а жёсткое требование самого relay (tproxy-server): "listen", "public
+# application" и КАЖДЫЙ backend-адрес должны быть числовым loopback-адресом
+# (официальный README tproxy-server), а relay вызывает и tgws (backend), и
+# cover (public application) именно так. Для caddy это уже наш выбор, но
+# вынужденный: пробовали сделать caddy ОБЫЧНЫМ сервисом (стучится к
+# форвардеру cover по DNS-имени владельца namespace, tgws:19443) -- и
+# упёрлись в отдельное ограничение самого Docker: имя сервиса-ВЛАДЕЛЬЦА
+# network_mode: service:X группы НЕ резолвится через embedded DNS другими
+# контейнерами, даже когда у него есть корректный IP на сети (проверено
+# живьём: `docker network connect` даёт владельцу IP, виден в `docker
+# network inspect`, но ни один сосед его по имени не находит). Пришлось
+# вернуть caddy в общую группу.
+#
+# Известный системный риск этой схемы (устранить полностью нельзя -- см.
+# выше): при пересборке/пересоздании ВЛАДЕЛЬЦА namespace (tgws) "гости"
+# (relay, cover, caddy) остаются привязаны к СТАРОМУ, уже мёртвому
+# namespace, хотя сами выглядят как "Up" -- молча перестают отвечать.
+# Сведён к минимуму: TGWS_REF/TPROXY_REF закреплены на конкретный коммит
+# (не "main"/"master"), чтобы `--build` не пересобирал образ неожиданно
+# просто из-за нового коммита в чужом репозитории -- тогда пересоздание
+# tgws становится редким, осознанным действием. Если он всё же пересоздался
+# -- сразу следом:
+#   docker compose up -d --force-recreate relay cover caddy
+#
+# Запуск: docker compose -f docker-compose.remote-cf-caddy.yml up -d
+# (образы тянутся готовые из приватного scposs/tproxy-web на Docker Hub --
+# docker login нужен один раз на хосте перед первым `up`; build: из
+# исходников больше не требуется -- важно для Synology Container Manager,
+# который не на всех версиях DSM поддерживает build: в compose-проекте, и
+# чтобы не нужен был git-клон репозитория на самом NAS).
+#
+# Как обновить образы (при бампе TGWS_REF/TPROXY_REF или правке Go-кода):
+# из корня репозитория --
+#   docker buildx build --platform linux/amd64 -t scposs/tproxy-web:tgws-v2 \
+#     --build-arg TGWS_REF=<новый SHA> ./tgws --push
+#   (аналогично relay-vN из ./relay, cover-vN/socks5-vN/panel-admin-vN --
+#   у cover и panel-admin context: . из корня репозитория, не их подкаталог,
+#   см. их Dockerfile) -- и поднять версию тега здесь в compose-файле.
+name: tproxy-web
+
+services:
+  tgws:
+    # Готовый образ (не build: из исходников) -- собран и запушен вручную из
+    # ./tgws с TGWS_REF=307a384ab7f522e34bb1a045884d0bd90f40bee5 (см. заголовок
+    # файла, "Как обновить образы"). Нужно для Synology: Container Manager не
+    # на всех версиях DSM поддерживает build: в compose-проекте, да и без
+    # исходников/git-клона деплой проще.
+    image: scposs/tproxy-web:tgws-v1
+    restart: unless-stopped
+    ports:
+      # FORWARDER_PORT -- форвардер cover (ДРУГОЙ процесс в ЭТОМ ЖЕ network
+      # namespace, см. заголовок файла) слушает 0.0.0.0:FORWARDER_PORT.
+      # Публикуем на ВСЕХ интерфейсах (не только loopback) -- так панель
+      # (/ADMIN_PATH/) доступна по локальному IP NAS из домашней сети, без
+      # похода через публичный домен/443 и Caddy (plain HTTP, TLS тут не
+      # нужен -- тот же самый порт, к которому обращается Caddy, никакой
+      # новой поверхности не прибавляет). Если это нежелательно (NAS не в
+      # доверенной сети) -- верните на "127.0.0.1:${FORWARDER_PORT:-19443}:...".
+      # WEB_PUBLIC_PORT -- публичный HTTPS-порт, который реально слушает
+      # caddy (тоже в этой группе, см. ниже) -- Docker не даёт порт
+      # publishing на сервисе-госте network_mode, только на владельце namespace.
+      - "${FORWARDER_PORT:-19443}:${FORWARDER_PORT:-19443}"
+      - "${WEB_PUBLIC_PORT:-443}:${WEB_PUBLIC_PORT:-443}"
+    environment:
+      TG_WS_PROXY_HOST: 127.0.0.1
+      TG_WS_PROXY_PORT: "2398"
+      # TGWS_SECRET/CF_WORKER_AUTH могут быть пустыми -- panel-admin
+      # генерирует их сам при старте (bootstrap()) в общий volume config_data,
+      # а tgws дожидается и читает оттуда (см. entrypoint в tgws/Dockerfile).
+      # CF_WORKER -- единственное отсюда, что по-настоящему обязано быть
+      # задано заранее (ваш собственный домен Cloudflare Worker).
+      TG_WS_PROXY_SECRET: ${TGWS_SECRET:-}
+      TG_WS_PROXY_CF_WORKER: ${CF_WORKER:?set CF_WORKER in .env}
+      TG_WS_PROXY_CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+      TG_WS_PROXY_ONLY_WORKER: ${TGWS_ONLY_WORKER:-0}
+    volumes:
+      - config_data:/config:ro
+    depends_on:
+      panel-admin:
+        condition: service_healthy
+
+  relay:
+    # Готовый образ -- собран из ./relay с TPROXY_REF=c8adb8b7c6b7fc46c12ae3acb68be9070c26a8e8
+    image: scposs/tproxy-web:relay-v1
+    network_mode: "service:tgws" # см. заголовок файла -- требование самого relay
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - config_data:/config:ro
+    depends_on:
+      tgws:
+        condition: service_started
+      panel-admin:
+        condition: service_healthy
+
+  # cover -- свой маленький Go-бинарник (не nginx): форвардер 0.0.0.0->relay,
+  # сайт-прикрытие, прокси к panel-admin -- всё в одном процессе. См.
+  # cover/main.go для причин (Docker-NAT-на-loopback и X-Forwarded-For).
+  cover:
+    image: scposs/tproxy-web:cover-v7 # + серверный рендер mtproto/socks5 (без pending-заглушки) + тумблер локального IP для SOCKS
+    network_mode: "service:tgws" # см. заголовок файла -- нужен loopback до relay
+    restart: unless-stopped
+    environment:
+      # ADMIN_PATH/PANEL_TOKEN могут быть пустыми -- та же логика, что у
+      # TGWS_SECRET выше: cover дожидается и читает их из общего
+      # volume config_data сам (envOrFile в cover/main.go), если переменная
+      # не задана.
+      ADMIN_PATH: ${ADMIN_PATH:-}
+      PANEL_TOKEN: ${PANEL_TOKEN:-}
+      HOSTNAME_ARG: ${HOSTNAME_ARG:?}
+      # Должен совпадать с FORWARDER_PORT, который слушают снаружи tgws
+      # (ports:) и к которому ходит caddy -- иначе porты разойдутся.
+      FORWARDER_ADDR: 0.0.0.0:${FORWARDER_PORT:-19443}
+    volumes:
+      # site/html и site/admin теперь ЗАПЕЧЕНЫ в образ cover (см. cover/Dockerfile) --
+      # не host bind-mount. На Synology это значит: не нужно руками класть эти
+      # файлы в папку проекта через File Station перед первым запуском.
+      - config_data:/config:ro
+    depends_on:
+      tgws:
+        condition: service_started
+      panel-admin:
+        condition: service_healthy
+
+  # caddy -- терминирует публичный TLS на WEB_PUBLIC_PORT (443 по умолчанию --
+  # обязательно для клиентов WEB-прокси, см. заголовок файла) и проксирует на
+  # форвардер cover через 127.0.0.1:19443 -- в ОДНОЙ network namespace с tgws
+  # (см. заголовок файла, почему пришлось оставить именно так).
+  #
+  # Сертификат, три варианта (проверяются в этом порядке):
+  #   1. ./certs/fullchain.pem + privkey.pem -- Caddy берёт готовый
+  #      сертификат как есть (например, уже выпущенный certbot'ом/acme.sh
+  #      для другого домена на этом же хосте -- просто скопируйте файлы,
+  #      ACME-клиент внутри Caddy трогать не нужно).
+  #   2. CADDY_AUTO_HTTPS=1 в .env -- "из коробки" для голого VPS с
+  #      доменом, указывающим ПРЯМО на этот сервер (без Cloudflare/NPM
+  #      перед ним): Caddy сам получает настоящий Let's Encrypt через
+  #      автоматический ACME (TLS-ALPN-01, целиком по WEB_PUBLIC_PORT --
+  #      отдельный порт 80 не нужен, хотя и не мешает, если тоже открыт).
+  #      Не включено по умолчанию, чтобы не ломать уже работающие
+  #      self-signed-деплои (следующий пункт) неожиданной сменой режима.
+  #   3. Ничего не задано -- самоподписанный "tls internal" (Caddy сам
+  #      генерирует и хранит в volume caddy_data). Самоподписанного
+  #      достаточно, когда перед сервером Cloudflare (443 -- один из
+  #      стандартных проксируемых портов Cloudflare, в отличие от
+  #      произвольных) в режиме Full SSL (не Full strict) -- он не проверяет
+  #      цепочку источника. Если Cloudflare в режиме Full strict (или
+  #      сервер смотрит в интернет вообще без CDN, трафик идёт прямо на
+  #      origin -- используйте вариант 2) -- нужен настоящий сертификат,
+  #      иначе внешние клиенты получат TLS-ошибку на хендшейке (поймано
+  #      живым тестом на НЕ-стандартном для Cloudflare порту, где Cloudflare
+  #      трафик не проксирует вовсе, и клиент видит сертификат источника
+  #      напрямую).
+  #
+  # HTTP/3 (QUIC/UDP) отключён глобально (protocols h1 h2 ниже) -- найдено
+  # живым тестом 2026-11-02/03: провайдер может резать исходящий UDP/443,
+  # и встроенный WebView-транспорт клиента Telegram, явно/неявно пробуя
+  # сначала QUIC, зависает вместо отката на TCP (внешне выглядит как "клиент
+  # вообще не пытается подключиться" -- ни одного TCP SYN на сервере).
+  # h1/h2 идут только по TCP, этот сценарий не затрагивают.
+  caddy:
+    image: caddy:2-alpine
+    # network_mode: "service:tgws" -- ПОПРОБОВАЛИ без этого (caddy стучится
+    # к tgws:19443 по DNS, как любой нормальный сервис) и упёрлись в
+    # отдельное ограничение Docker: имя сервиса-ВЛАДЕЛЬЦА network_mode:
+    # service:X группы НЕ резолвится через embedded DNS другими контейнерами,
+    # даже когда у него есть корректный IP на сети (проверено живьём: ручной
+    # `docker network connect` даёт owner'у IP, виден в `docker network
+    # inspect`, но `getent hosts tgws` из соседнего контейнера всё равно
+    # не находит ничего). Это ограничение самого Docker, не наша ошибка
+    # конфигурации -- возвращаем caddy в общую группу, тот же приём, что
+    # использовали для cover/relay с самого начала.
+    network_mode: "service:tgws"
+    restart: unless-stopped
+    environment:
+      WEB_PUBLIC_PORT: ${WEB_PUBLIC_PORT:-443}
+      FORWARDER_PORT: ${FORWARDER_PORT:-19443}
+      HOSTNAME_ARG: ${HOSTNAME_ARG:?}
+      CADDY_AUTO_HTTPS: ${CADDY_AUTO_HTTPS:-}
+    volumes:
+      - caddy_data:/data
+      - ./certs:/certs:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # ВАЖНО: без имени хоста в адресе блока ("просто :порт") Caddy не
+      # включает выпуск сертификата по требованию (on_demand) -- при
+      # реальном подключении с SNI он отвечает "no certificate available"
+      # и рвёт хендшейк (поймано живым тестом, не из документации). Имя
+      # хоста явно известно (HOSTNAME_ARG) -- при self-signed/авто-ACME
+      # режимах Caddy сам проактивно выпускает для него сертификат при
+      # старте, явный `tls` нужен только для варианта 1 (готовый файл).
+      - |
+        if [ -f /certs/fullchain.pem ] && [ -f /certs/privkey.pem ]; then
+          TLS_LINE="tls /certs/fullchain.pem /certs/privkey.pem"
+        elif [ -n "$$CADDY_AUTO_HTTPS" ]; then
+          TLS_LINE=""
+        else
+          TLS_LINE="tls internal"
+        fi
+        {
+          echo '{'
+          echo '	servers {'
+          echo '		protocols h1 h2'
+          echo '	}'
+          echo '}'
+          printf '%s:%s {\n' "$$HOSTNAME_ARG" "$$WEB_PUBLIC_PORT"
+          [ -n "$$TLS_LINE" ] && printf '\t%s\n' "$$TLS_LINE"
+          printf '\treverse_proxy 127.0.0.1:%s\n}\n' "$$FORWARDER_PORT"
+        } > /etc/caddy/Caddyfile
+        cat /etc/caddy/Caddyfile
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    depends_on: [tgws, cover]
+
+  # Опционально: классический MTProto (fake-TLS), для настоящих MTProto-клиентов,
+  # не WEB-прокси. Та же сборка, что и tgws (Flowseal/tg-ws-proxy), запущена
+  # напрямую с --fake-tls-domain вместо режима "бэкенд для relay".
+  #
+  # profiles: не входит в сервисы по умолчанию -- простой `docker compose up`
+  # (без явного списка сервисов, как сделает форма Container Manager на
+  # Synology) его пропустит. Явное указание имени сервиса (--build mtproto,
+  # как делает install.sh, или panel-admin через toggle) всё равно поднимает
+  # его, несмотря на profiles -- так и задумано в самом Docker Compose.
+  mtproto:
+    profiles: ["optional"]
+    image: scposs/tproxy-web:tgws-v1 # тот же образ, что tgws -- запущен иначе через entrypoint/command ниже
+    restart: unless-stopped
+    entrypoint: ["/opt/venv/bin/python", "-u", "proxy/tg_ws_proxy.py"]
+    environment:
+      TG_WS_PROXY_CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+    command:
+      - --host=0.0.0.0
+      - --port=8446
+      - --secret=${MTPROTO_SECRET:-}
+      - --fake-tls-domain=${MTPROTO_FAKE_TLS_DOMAIN:-}
+      - --cfproxy-worker-domain=${CF_WORKER:-}
+    ports:
+      - "${MTPROTO_PORT:-18446}:8446"
+
+  # Опционально: SOCKS5 с логином/паролем. БЕЗ TLS -- у протокола нет
+  # собственного шифрования транспорта, и клиенты Telegram не умеют
+  # SOCKS5-over-TLS (в их проекте proxy settings для SOCKS5 -- только
+  # сервер/порт/логин/пароль, см. README). Не в сервисах по умолчанию,
+  # поднимайте явно -- install.sh/panel-admin делают это сами, когда вы
+  # включаете SOCKS5 в меню/панели:
+  #   docker compose -f docker-compose.remote-cf-caddy.yml up -d socks5
+  #
+  # Свой бинарник (не serjs/go-socks5-proxy) -- тому пришлось бы всегда
+  # дозваниваться напрямую, а с этого сервера нет прямого доступа к Telegram
+  # (DPI/провайдер, подтверждено живым тестом). См. socks5/main.go: при IP
+  # из диапазонов Telegram сразу идёт тот же туннель через Cloudflare Worker,
+  # которым уже пользуются tgws/mtproto -- без всяких изменений в самом
+  # Worker'е, он уже умеет быть универсальной TCP-трубой на dst:443.
+  #
+  # profiles: та же причина, что у mtproto выше -- не должен подниматься
+  # сам при простом `docker compose up` без явного имени сервиса.
+  socks5:
+    profiles: ["optional"]
+    image: scposs/tproxy-web:socks5-v1
+    restart: unless-stopped
+    environment:
+      PROXY_USER: ${SOCKS5_USER:-}
+      PROXY_PASSWORD: ${SOCKS5_PASS:-}
+      # Опциональны -- без Worker'а socks5 просто не пробует запасной путь
+      # через Cloudflare для IP Telegram, всегда только прямое соединение
+      # (ровно то, что сейчас и нужно -- см. комментарий выше про profiles).
+      CF_WORKER: ${CF_WORKER:-}
+      CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+    ports:
+      - "${SOCKS5_PORT:-18447}:1080"
+
+  # panel-admin: даёт мини-панели (site/admin) реально включать/выключать
+  # протоколы и перевыпускать секреты. ВСЕГДА в сервисах по умолчанию (не
+  # опционален, как mtproto/socks5) -- без него у панели не работают
+  # тумблеры/кнопки, только статическая страница.
+  #
+  # Намеренно НЕ host-демон под systemd (такой подход не переносится на
+  # Synology DSM и подобные NAS с собственным управлением сервисами) --
+  # обычный сервис compose, docker-outside-of-docker: монтирует ТОЛЬКО
+  # docker.sock хоста (стандартный путь практически везде) -- НИКАКОГО
+  # host-пути проекта знать не нужно. Сам compose-файл и config.json.template
+  # запечены в образ при сборке (см. panel-admin/Dockerfile), имя проекта
+  # зафиксировано явно (-p tproxy-web в main.go, должно совпадать с `name:`
+  # в начале этого файла), а все секреты/состояние живут в именованном
+  # volume config_data -- не в host bind-mount. Раньше вместо этого нужно
+  # было смонтировать ${PROJECT_DIR}:${PROJECT_DIR} по тому же абсолютному
+  # пути, что и на хосте -- пользователю приходилось вводить его точно в
+  # форме Container Manager; при ошибке `docker compose` внутри контейнера
+  # неправильно резолвил relative-пути volume'ов. Теперь этого параметра нет.
+  panel-admin:
+    image: scposs/tproxy-web:panel-admin-v10 # + авто-определение локального IP для SOCKS без ручного LOCAL_IP в .env
+    restart: unless-stopped
+    ports:
+      # Независимый вход в панель (логин+пароль, см. panel-admin/main.go) --
+      # НЕ зависит от состояния relay/cover/caddy/tgws, отдельный листенер,
+      # публикуется напрямую с хоста, в обход caddy/cover полностью.
+      - "${PANEL_PUBLIC_PORT:-7655}:7655"
+    environment:
+      LISTEN_ADDR: 0.0.0.0:7654
+      LISTEN_ADDR_PUBLIC: 0.0.0.0:7655
+      # Нужны ТОЛЬКО если образы в приватном репозитории (scposs/tproxy-web
+      # сейчас именно такой) -- panel-admin сам логинится в Docker Hub при
+      # старте (dockerLogin() в main.go), иначе его собственные вызовы
+      # docker compose (тумблеры в панели) падают с "pull access denied":
+      # авторизация, сделанная на хосте (GUI Container Manager/ssh docker
+      # login), этому процессу не видна -- у него свой Docker CLI внутри
+      # контейнера, отдельный credential store от хоста. С публичными
+      # образами можно оставить пустыми.
+      DOCKERHUB_USER: ${DOCKERHUB_USER:-}
+      DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
+      # PANEL_TOKEN не обязателен -- bootstrap() сам генерирует и хранит
+      # его в config_data/panel_token при первом старте, если не задан тут.
+      PANEL_TOKEN: ${PANEL_TOKEN:-}
+      # ADMIN_PATH не обязателен -- bootstrap() сам генерирует случайный,
+      # если не задан. Можно прописать свой короткий путь вместо случайного
+      # (например ADMIN_PATH=duroff в .env) -- должен быть задан И ЗДЕСЬ,
+      # И у cover (environment: ADMIN_PATH ниже) -- иначе один из двух
+      # всё равно подхватит старое/случайное значение из файла.
+      ADMIN_PATH: ${ADMIN_PATH:-}
+      HOSTNAME_ARG: ${HOSTNAME_ARG:?}
+      CF_WORKER: ${CF_WORKER:-}
+      # Необязательно -- если уже есть настроенный Cloudflare Worker (тот же,
+      # что у другого вашего сервера), впишите сюда его РЕАЛЬНЫЙ секрет AUTH
+      # явно -- иначе bootstrap() сгенерирует свой, который не совпадёт с
+      # уже настроенным в Worker'е, и выход в Telegram через него не заработает.
+      CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+      # Необязательно -- IP этого сервера в ВАШЕЙ локальной сети (SOCKS5 --
+      # туннель для неё, не способ обхода блокировок Telegram, см. пометку
+      # в панели). Без него в ссылке SOCKS5 будет HOSTNAME_ARG, как раньше.
+      # Ни один сервис этого стека не на network_mode: host, поэтому сам
+      # контейнер не может определить реальный LAN IP хоста автоматически.
+      LOCAL_IP: ${LOCAL_IP:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - config_data:/config
+    healthcheck:
+      # Без авторизации, см. handleHealthz в panel-admin/main.go -- просто
+      # "bootstrap выполнен, сервер поднят". tgws/relay/cover ждут именно
+      # этого статуса (condition: service_healthy выше), чтобы не читать
+      # config_data раньше, чем bootstrap() там всё создаст.
+      #
+      # ВАЖНО: interval (ниже) -- это частота проверки ВСЮ жизнь контейнера,
+      # не только на старте, в отличие от того, что можно было бы подумать
+      # по соседству со start_period. С interval=2s постоянно (как было
+      # раньше) docker-демон на КАЖДОЙ проверке переписывает config.v2.json
+      # контейнера на диск -- на части хостов (особенно Synology/btrfs на
+      # HDD) это давало заметную непрерывную запись ~единицы МБ/с без какой
+      # либо активности панели. start_interval -- отдельная частая частота
+      # ТОЛЬКО для окна start_period (быстрое обнаружение готовности при
+      # старте, как и раньше), interval -- уже степенная частота после
+      # этого. Нужен Docker Engine 25+/Compose 2.20+ (есть везде, где
+      # разворачивали -- Docker 29.x).
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:7654/healthz"]
+      interval: 30s
+      timeout: 2s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+volumes:
+  caddy_data:
+  config_data:

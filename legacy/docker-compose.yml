@@ -1,0 +1,48 @@
+# Все три сервиса живут в сетевом пространстве контейнера NPM.
+# Поэтому их 127.0.0.1 — это тот же loopback, что у nginx внутри NPM:
+#   relay  127.0.0.1:18080 (admin 18081)   <- сюда проксирует NPM
+#   site   127.0.0.1:13000                 <- сайт-прикрытие (public_upstream)
+#   mtproxy 2398 / 8888                    <- backend relay, наружу не опубликован
+# Наружу открыты только порты, которые уже публикует сам NPM (80/443/81).
+#
+# После пересоздания контейнера NPM (обновление образа) перезапустите и этот стек:
+#   docker compose up -d --force-recreate
+
+x-netns: &netns
+  network_mode: "container:${NPM_CONTAINER:?укажите NPM_CONTAINER в .env}"
+
+services:
+  mtproxy:
+    build: ./mtproxy
+    <<: *netns
+    init: true
+    restart: unless-stopped
+    environment:
+      MTPROXY_SECRET: ${MTPROXY_SECRET:?}
+      PUBLIC_IP: ${PUBLIC_IP:?}
+      MTPROXY_WORKERS: ${MTPROXY_WORKERS:-1}
+      MTPROXY_MAX_CONNECTIONS: ${MTPROXY_MAX_CONNECTIONS:-4096}
+    ulimits:
+      nofile: 1048576
+
+  site:
+    image: nginx:1.27-alpine
+    <<: *netns
+    restart: unless-stopped
+    volumes:
+      - ./site/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./site/html:/usr/share/nginx/html:ro
+
+  relay:
+    build:
+      context: ./relay
+      args:
+        TPROXY_REF: ${TPROXY_REF:-master}
+    <<: *netns
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./config:/config:ro
+    depends_on: [mtproxy, site]

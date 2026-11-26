@@ -1,0 +1,125 @@
+# УДАЛЁННЫЙ РЕЖИМ + ВЫХОД В TELEGRAM ЧЕРЕЗ CLOUDFLARE WORKER
+# Для сетей, где прямой доступ к серверам Telegram закрыт.
+#
+#   клиент ─https─▶ главный NPM ─https─▶ :18443 gateway ─▶ relay
+#                                                            │ 127.0.0.1:2398
+#                                                            ▼
+#                                              tg-ws-proxy (Flowseal) ─WS─▶ Telegram
+#                                                            └─ если закрыто ─▶ ваш Worker на Cloudflare ─▶ Telegram
+#
+# tg-ws-proxy слушает только 127.0.0.1:2398 внутри gateway и наружу не виден.
+# Секрет общий: tg-ws-proxy получает 32 hex, relay — тот же секрет с префиксом dd.
+#
+# Запуск: docker compose -f docker-compose.remote-cf.yml up -d --build
+
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-18443}:8443"
+    environment:
+      NPM_IP: ${NPM_IP:?укажите NPM_IP в .env}
+    volumes:
+      - ./remote/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./remote/certs:/etc/nginx/certs:ro
+      - ./site/html:/usr/share/nginx/html:ro
+
+  tgws:
+    build:
+      # официальный tg-ws-proxy + патч: ключ auth в запросах к воркеру (tgws/patch_auth.py)
+      context: ./tgws
+      args:
+        TGWS_REF: ${TGWS_REF:-main}
+    network_mode: "service:gateway"
+    restart: unless-stopped
+    environment:
+      TG_WS_PROXY_HOST: 127.0.0.1
+      TG_WS_PROXY_PORT: "2398"
+      TG_WS_PROXY_SECRET: ${TGWS_SECRET:?укажите TGWS_SECRET в .env (32 hex)}
+      TG_WS_PROXY_CF_WORKER: ${CF_WORKER:?укажите CF_WORKER в .env (домен воркера)}
+      # тот же ключ — в секрет AUTH воркера (Settings → Variables and Secrets)
+      TG_WS_PROXY_CF_WORKER_AUTH: ${CF_WORKER_AUTH:?укажите CF_WORKER_AUTH в .env}
+      # 1 — весь Telegram только через свой Worker; 0 — прямой путь + Worker + общие домены
+      TG_WS_PROXY_ONLY_WORKER: ${TGWS_ONLY_WORKER:-0}
+    depends_on: [gateway]
+
+  relay:
+    build:
+      context: ./relay
+      args:
+        TPROXY_REF: ${TPROXY_REF:-master}
+    network_mode: "service:gateway"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./config:/config:ro
+    depends_on: [gateway, tgws]
+
+  # Опционально: классический MTProto (fake-TLS). См. docker-compose.remote-cf-caddy.yml
+  # для полного комментария -- тот же сервис, поднимать явно:
+  #   docker compose -f docker-compose.remote-cf.yml up -d --build mtproto
+  mtproto:
+    build:
+      context: ./tgws
+      args:
+        TGWS_REF: ${TGWS_REF:-main}
+    restart: unless-stopped
+    entrypoint: ["/opt/venv/bin/python", "-u", "proxy/tg_ws_proxy.py"]
+    environment:
+      TG_WS_PROXY_CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+    command:
+      - --host=0.0.0.0
+      - --port=8446
+      - --secret=${MTPROTO_SECRET:-}
+      - --fake-tls-domain=${MTPROTO_FAKE_TLS_DOMAIN:-}
+      - --cfproxy-worker-domain=${CF_WORKER:-}
+    ports:
+      - "${MTPROTO_PORT:-18446}:8446"
+
+  # Опционально: SOCKS5 с логином/паролем. БЕЗ TLS -- у протокола нет
+  # собственного шифрования транспорта, и клиенты Telegram не умеют
+  # SOCKS5-over-TLS (в их проекте proxy settings для SOCKS5 -- только
+  # сервер/порт/логин/пароль, см. README). Не в сервисах по умолчанию,
+  # поднимайте явно -- install.sh/panel-admin делают это сами, когда вы
+  # включаете SOCKS5 в меню/панели:
+  #   docker compose -f docker-compose.remote-cf-caddy.yml up -d socks5
+  socks5:
+    build: ./socks5
+    restart: unless-stopped
+    environment:
+      PROXY_USER: ${SOCKS5_USER:-}
+      PROXY_PASSWORD: ${SOCKS5_PASS:-}
+      CF_WORKER: ${CF_WORKER:?}
+      CF_WORKER_AUTH: ${CF_WORKER_AUTH:?}
+    ports:
+      - "${SOCKS5_PORT:-18447}:1080"
+
+  # panel-admin: даёт мини-панели (site/admin) реально включать/выключать
+  # протоколы и перевыпускать секреты. ВСЕГДА в сервисах по умолчанию (не
+  # опционален, как mtproto/socks5) -- без него у панели не работают
+  # тумблеры/кнопки, только статическая страница.
+  #
+  # Намеренно НЕ host-демон под systemd (такой подход не переносится на
+  # Synology DSM и подобные NAS с собственным управлением сервисами) --
+  # обычный сервис compose, docker-outside-of-docker: монтирует docker.sock
+  # хоста и сам каталог проекта по тому ЖЕ абсолютному пути, что и на
+  # хосте, иначе `docker compose` внутри контейнера неправильно резолвит
+  # relative-пути volume'ов в самих compose-файлах (валидировано живьём).
+  # Наружу порт не публикуется -- его видит только cover по имени сервиса
+  # в сети docker compose (обычная изоляция, без костылей с IP бриджа).
+  panel-admin:
+    build: ./panel-admin
+    restart: unless-stopped
+    environment:
+      PROJECT_DIR: ${PROJECT_DIR:?}
+      COMPOSE_FILE: ${PANEL_COMPOSE_FILE:?}
+      LISTEN_ADDR: 0.0.0.0:7654
+      PANEL_TOKEN: ${PANEL_TOKEN:?}
+      HOSTNAME_ARG: ${HOSTNAME_ARG:?}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PROJECT_DIR}:${PROJECT_DIR}
+    working_dir: ${PROJECT_DIR}

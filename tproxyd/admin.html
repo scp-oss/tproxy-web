@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NodeSentry — панель</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161c24;
+    --border: #2a333f;
+    --text: #d6e0ea;
+    --text-dim: #7c8a9a;
+    --accent: #3b9dff;
+    --ok: #3ecf8e;
+    --warn: #e8b339;
+    --err: #e85d5d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 28px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .card h2 { font-size: 15px; }
+  .status { font-size: 12px; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .status.ok { color: var(--ok); }
+  .status.off { color: var(--text-dim); }
+  .status.pending { color: var(--warn); }
+  .status.err { color: var(--err); }
+  .spinner {
+    width: 11px; height: 11px;
+    border: 2px solid var(--border);
+    border-top-color: var(--warn);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .link-box {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--accent);
+    word-break: break-all;
+    margin-bottom: 10px;
+    min-height: 16px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    display: inline-block;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #0a0d12;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+  }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.danger { background: var(--err); color: #0a0d12; }
+  input[type=text] {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    width: 140px;
+  }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+  .switch {
+    position: relative; width: 40px; height: 22px; flex-shrink: 0;
+    background: var(--border); border-radius: 11px; cursor: pointer; border: none;
+    transition: background 0.15s;
+  }
+  .switch.on { background: var(--ok); }
+  .switch.pending { background: var(--warn); cursor: wait; }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%; background: #fff;
+    transition: left 0.15s;
+  }
+  .switch.on::after { left: 20px; }
+  .fields { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: none; }
+  .fields.show { display: flex; }
+  .cmd {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    overflow-x: auto;
+  }
+  footer { color: var(--text-dim); font-size: 11px; margin-top: 24px; text-align: center; }
+  .qr {
+    width: 140px; height: 140px;
+    border-radius: 8px;
+    background: #fff;
+    padding: 6px;
+    display: none;
+    flex-shrink: 0;
+  }
+  .qr.show { display: block; }
+  .link-row { display: flex; gap: 12px; align-items: center; }
+  .logout { position: absolute; top: 24px; right: 24px; color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  .logout:hover { color: var(--text); }
+  .wrap { position: relative; }
+  .problem { color: var(--err); font-size: 12px; margin: -8px 0 12px; word-break: break-word; }
+  .note { color: var(--text-dim); font-size: 12px; line-height: 1.45; margin-bottom: 10px; }
+  .upstream { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  .upstream .row input { flex: 1; min-width: 200px; }
+  .field input, .upstream input { background: #0a0d12; border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 7px 9px; font-size: 13px; }
+  .diag-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 13px; gap: 10px; }
+  .diag-row .status { margin-bottom: 0; }
+  @media (max-width: 560px) { .link-row { flex-direction: column; align-items: stretch; } .qr { align-self: center; } .logout { position: static; display: inline-block; margin-bottom: 8px; } }
+  .peer { border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 10px; }
+  .peer-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; font-size:13px; }
+  .peer pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--text-dim); background:#0a0d12; border:1px solid var(--border); border-radius:8px; padding:8px; margin:0; }
+  .tabs { display:flex; gap:6px; margin: -12px 0 18px; }
+  .tab { flex:1; padding:10px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text-dim); font-size:14px; font-weight:600; cursor:pointer; }
+  .tab.on { background: var(--panel); color: var(--text); border-color: var(--accent); }
+  .page { display:none; } .page.on { display:block; }
+  .share { font-size: 11px; color: var(--text-dim); margin-top: 6px; line-height: 1.4; }
+  .kn-table { border-collapse: collapse; margin: 8px 0 4px; font-size: 12px; }
+  .kn-table th, .kn-table td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+  .kn-table code { user-select: all; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  __LOGOUT__
+  <h1>Панель подключения</h1>
+  <div class="sub">__HOSTNAME__</div>
+
+  <div class="tabs">
+    <button class="tab" data-page="proxy">Прокси</button>
+    <button class="tab" data-page="calls">Звонки</button>
+  </div>
+  <div class="card" id="localip-card" style="display:none;padding:12px 16px">
+    <div class="row" style="gap:10px">
+      <button class="switch" id="localip-switch"></button>
+      <span style="font-size:13px">Ссылки и QR с локальным IP <b id="localip-ip"></b> вместо домена — для своей сети</span>
+    </div>
+    <div class="note" style="margin:6px 0 0">Действует на MTProto, SOCKS5 и WireGuard. WEB-прокси всегда по домену.</div>
+  </div>
+  <div class="page" id="page-proxy">
+  <div class="card" id="diag-card">
+    <div class="card-head"><h2>Диагностика</h2></div>
+    <div class="diag-row"><span>Cloudflare Worker</span><span class="status" id="diag-cf">…</span></div>
+    <div class="diag-row" id="diag-up-row" style="display:none"><span>Внешний узел (звонки)</span><span class="status" id="diag-up">…</span></div>
+  </div>
+
+  <div class="card" data-proto="web">
+    <div class="card-head">
+      <h2>WEB-прокси (Telegram Desktop 7.1.1+, тип WEB)</h2>
+      <button class="switch" data-switch="web"></button>
+    </div>
+    <div class="status off" data-status="web">…</div>
+    <div class="problem" id="web-problem" style="display:none"></div>
+    <div class="link-row">
+      <div class="link-col"><div class="link-box" id="web-link" data-link="web"></div><div class="share" id="web-share"></div></div>
+      <img class="qr" id="web-qr" alt="QR">
+    </div>
+    <div class="row" id="web-actions" style="display:none">
+      <a class="btn" id="web-open" href="#">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="web-link">Скопировать</button>
+      <button class="btn ghost" data-regen="web">Перевыпустить секрет</button>
+    </div>
+    <div class="row"><button class="btn ghost" id="web-ports-btn" type="button">Порты входа</button><span class="note" id="web-listen"></span></div>
+    <div class="fields" id="web-ports">
+      <label class="field">HTTP для NPM / Caddy (IP:порт)<input type="text" id="web-http" placeholder="127.0.0.1:19443"></label>
+      <label class="field">Порт HTTPS напрямую (пусто — не открывать)<input type="text" id="web-tls" placeholder="443"></label>
+      <button class="btn" id="web-listen-apply" type="button" style="align-self:flex-end">Применить</button>
+      <div class="note" style="flex-basis:100%">Ссылка от порта не зависит: Telegram подключается к домену по 443. Внешний 443 направьте сюда — обратным прокси на HTTP-вход или пробросом порта на роутере на HTTPS-вход (сертификат — в ./certs, иначе самоподписанный). Применяется сразу, без перезапуска.</div>
+    </div>
+  </div>
+
+  <div class="card" data-proto="mtproto">
+    <div class="card-head">
+      <h2>MTProto (обычный прокси, fake-TLS)</h2>
+      <button class="switch" data-switch="mtproto"></button>
+    </div>
+    <div class="status off" data-status="mtproto">…</div>
+    <div class="problem" id="mtproto-problem" style="display:none"></div>
+    <div class="link-row">
+      <div class="link-col"><div class="link-box" id="mtproto-link" data-link="mtproto"></div></div>
+      <img class="qr" id="mtproto-qr" alt="QR">
+    </div>
+    <div class="row" id="mtproto-actions" style="display:none">
+      <a class="btn" id="mtproto-open" href="#">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="mtproto-link">Скопировать</button>
+      <button class="btn ghost" data-regen="mtproto">Перевыпустить секрет</button>
+      <button class="btn ghost" data-edit="mtproto">Порт / SNI</button>
+    </div>
+    <div class="fields" id="mtproto-fields">
+      <label class="field">Порт<input type="text" id="mtproto-port" placeholder="8443"></label>
+      <label class="field">SNI (домен для маскировки)<input type="text" id="mtproto-sni" placeholder="www.google.com"></label>
+      <button class="btn" data-apply="mtproto" style="align-self:flex-end">Применить и включить</button>
+    </div>
+  </div>
+
+  </div>
+  <div class="page" id="page-calls">
+  <div class="card" id="node-card">
+    <div class="card-head"><h2>Внешний узел (выход для звонков)</h2></div>
+    <div class="note">Сервер за границей, через который идут звонки (UDP) и сообщения модулей этой вкладки: Shadowsocks с поддержкой UDP,
+      например inbound «Shadowsocks» в 3x-ui (метод 2022-blake3-aes-128-gcm, сеть tcp,udp). Без узла звонки работать не будут: Cloudflare UDP не пропускает.</div>
+    <div class="status off" id="socks5-calls" style="margin-bottom:8px">…</div>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="upstream-link" placeholder="ss://… (ссылка из 3x-ui) — или заполните поля ниже" autocomplete="off" style="flex:1;min-width:200px">
+    </div>
+    <div class="fields show" style="gap:8px;flex-wrap:wrap">
+      <label class="field">Адрес<input type="text" id="node-host" placeholder="1.2.3.4"></label>
+      <label class="field">Порт<input type="text" id="node-port" placeholder="24443" style="width:90px"></label>
+      <label class="field">Пароль (ключ)<input type="text" id="node-pass" placeholder="base64-ключ" autocomplete="off"></label>
+      <label class="field">Шифрование<select id="node-method" style="background:#0a0d12;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px">
+        <option>2022-blake3-aes-128-gcm</option><option>2022-blake3-aes-256-gcm</option><option>2022-blake3-chacha20-poly1305</option>
+        <option>aes-256-gcm</option><option>aes-128-gcm</option><option>chacha20-ietf-poly1305</option></select></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="upstream-save">Сохранить узел</button>
+      <button class="btn ghost" id="upstream-clear">Убрать узел</button>
+    </div>
+  </div>
+  <div class="card" data-proto="socks5">
+    <div class="card-head">
+      <h2>SOCKS5 (логин/пароль, звонки)</h2>
+      <button class="switch" data-switch="socks5"></button>
+    </div>
+    <div class="note"><b>Звонки через SOCKS5 работают только на iPhone</b>: в Telegram включите «Использовать для звонков».
+      Telegram для Android звонки через прокси не пускает вообще — на Android для звонков используйте VPN.
+      Сообщения идут через внешний узел (блок выше), а без него — через Cloudflare Worker.</div>
+    <div class="status off" data-status="socks5">…</div>
+    <div class="problem" id="socks5-problem" style="display:none"></div>
+    <div class="link-row">
+      <div class="link-col"><div class="link-box" id="socks5-link" data-link="socks5"></div><div class="share" id="socks5-share"></div></div>
+      <img class="qr" id="socks5-qr" alt="QR">
+    </div>
+    <div class="row" id="socks5-actions" style="display:none">
+      <a class="btn" id="socks5-open" href="#">Открыть в Telegram</a>
+      <button class="btn ghost" data-copy="socks5-link">Скопировать</button>
+      <button class="btn ghost" data-regen="socks5">Новый пароль</button>
+      <button class="btn ghost" data-edit="socks5">Порт / логин</button>
+    </div>
+    <div class="fields" id="socks5-fields">
+      <label class="field">Порт<input type="text" id="socks5-port" placeholder="1080"></label>
+      <label class="field">Логин<input type="text" id="socks5-user" placeholder="user"></label>
+      <label class="field">Пароль (пусто = прежний или новый)<input type="text" id="socks5-pass" placeholder=""></label>
+      <button class="btn" data-apply="socks5" style="align-self:flex-end">Применить и включить</button>
+    </div>
+  </div>
+
+
+  <div class="card" id="wg-card">
+    <div class="card-head">
+      <h2>WireGuard для Telegram (звонки на Android и iPhone)</h2>
+      <button class="switch" id="wg-switch"></button>
+    </div>
+    <div class="note">Профиль для приложения WireGuard на телефоне: в туннель идёт только Telegram — сообщения, звонки, видео; остальной интернет телефона как обычно.
+      Звонки работают, если задан внешний узел (блок выше). Для своей сети: адрес в профиле — локальный IP.</div>
+    <div class="row" style="margin-bottom:10px">
+      <a class="btn ghost" href="dl/wireguard.apk" download>⬇ WireGuard для Android (APK)</a>
+      <span style="font-size:12px;color:var(--text-dim)">официальный клиент; на iPhone — WireGuard из App Store</span>
+    </div>
+    <div class="status off" id="wg-status">…</div>
+    <div class="problem" id="wg-problem" style="display:none"></div>
+    <div class="fields" id="wg-fields">
+      <label class="field">UDP-порт<input type="text" id="wg-port" placeholder="51888"></label>
+      <button class="btn" id="wg-apply" style="align-self:flex-end">Применить и включить</button>
+    </div>
+    <div id="wg-invite" class="peer" style="display:none">
+      <div class="peer-head"><b>Наведите камеру телефона на QR</b><span id="wg-inv-left" style="color:var(--text-dim)"></span></div>
+      <div style="text-align:center"><img id="wg-inv-qr" alt="QR" style="width:min(320px,80vw);height:auto;background:#fff;padding:14px;border-radius:12px;image-rendering:pixelated"></div>
+      <div class="note" style="margin:10px 0 0">Откроется страница: имя устройства, приложение и профиль. Телефон должен быть в этой же сети.
+        Код действует 15 минут, им можно подключить несколько телефонов. Не сканируется — откройте ссылку на телефоне вручную:</div>
+      <div class="link-box" id="wg-inv-url" style="margin-top:8px"></div>
+    </div>
+    <div id="wg-peers"></div>
+    <div class="row" id="wg-add-row" style="margin-top:10px">
+      <input type="text" id="wg-name" placeholder="Имя устройства, например «S24»" style="flex:1;min-width:160px">
+      <button class="btn" id="wg-join">Подключить телефон (QR)</button>
+      <button class="btn ghost" id="wg-add">Добавить вручную</button>
+      <button class="btn ghost" id="wg-edit">Порт</button>
+    </div>
+  </div>
+
+
+  <div class="card" id="keenetic-card">
+    <details>
+      <summary style="cursor:pointer"><h2 style="display:inline">Звонки дома через роутер Keenetic</h2></summary>
+      <div class="note" style="margin-top:10px">Роутер сам заворачивает трафик Telegram всех устройств сети в туннель до панели, а панель — в выход за границу.
+        На телефонах ничего настраивать не нужно, звонки работают и на Android. Нужны: внешний узел и включённый модуль WireGuard (блоки выше).</div>
+      <ol class="note" style="padding-left:18px">
+        <li><b>Профиль для роутера.</b> Здесь, в блоке WireGuard: имя «Keenetic» → «Добавить вручную» → «Скачать .conf».</li>
+        <li><b>Компонент WireGuard.</b> В веб-интерфейсе Keenetic: <i>Управление → Общие настройки → Изменить набор компонентов</i>,
+          отметьте «WireGuard VPN» и установите. Роутер перезагрузится. Если компонент уже есть — пропустите.</li>
+        <li><b>Подключение.</b> <i>Интернет → Другие подключения</i>, раздел «WireGuard» → «Загрузить из файла» → выберите .conf.
+          Откройте появившееся подключение, <u>снимите</u> «Использовать для выхода в интернет», сохраните и включите переключатель подключения.
+          Через несколько секунд статус — «Подключено».</li>
+        <li><b>Маршруты до сетей Telegram.</b> <i>Сетевые правила → Маршрутизация → Добавить маршрут</i> — для каждой строки таблицы:
+          «Тип маршрута» — <b>Маршрут до сети</b>, «Адрес сети назначения» и «Маска» — из таблицы, «Адрес шлюза» — пусто,
+          «Интерфейс» — подключение WireGuard из шага 3, галочка «Добавлять автоматически». Сохранить.
+          <table class="kn-table" id="kn-table"><tr><th>Адрес сети</th><th>Маска</th></tr></table></li>
+        <li><b>Проверка.</b> Выключите прокси в Telegram на телефоне и позвоните. На странице подключения WireGuard в Keenetic должны расти счётчики переданных данных.</li>
+      </ol>
+      <div class="note">Отменить: удалите эти маршруты в <i>Маршрутизация</i> и выключите подключение WireGuard.
+        Остальной интернет сети этот способ не трогает: в туннель идут только сети Telegram.</div>
+    </details>
+  </div>
+
+  </div>
+  <footer>NodeSentry · __HOSTNAME__</footer>
+</div>
+<script>
+const INITIAL = __STATE_JSON__;
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+function api(path, opts) {
+  return fetch('api/' + path, Object.assign({headers: {'Content-Type': 'application/json'}, credentials: 'same-origin'}, opts))
+    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error((t || r.status).toString().trim()); }); return r.json(); });
+}
+
+function setStatus(proto, mode, text) {
+  const el = $('[data-status="' + proto + '"]');
+  if (!el) return;
+  el.className = 'status ' + mode;
+  el.innerHTML = (mode === 'pending' ? '<span class="spinner"></span> ' : '') + text;
+}
+
+function renderProto(proto, s) {
+  const sw = $('[data-switch="' + proto + '"]');
+  sw.classList.remove('pending');
+  sw.classList.toggle('on', !!s.enabled);
+  const box = $('#' + proto + '-link'), actions = $('#' + proto + '-actions'), qr = $('#' + proto + '-qr');
+  const open = $('#' + proto + '-open'), prob = $('#' + proto + '-problem'), fields = $('#' + proto + '-fields');
+  if (s.enabled && s.link) {
+    setStatus(proto, s.problem ? 'err' : 'ok', s.problem ? '● включён, но не работает' : '● активен' + (s.sni ? ', fake-TLS под ' + s.sni : ''));
+    box.textContent = s.link;
+    actions.style.display = 'flex';
+    if (open) open.href = s.open || s.link;
+    if (qr && s.qr) { qr.src = s.qr; qr.classList.add('show'); }
+    if (fields) fields.classList.remove('show');
+  } else {
+    setStatus(proto, 'off', s.note || 'выключен');
+    box.textContent = '';
+    actions.style.display = 'none';
+    if (qr) qr.classList.remove('show');
+  }
+  const sh = $('#' + proto + '-share');
+  if (sh) sh.innerHTML = s.enabled && s.share ? 'Ссылка открывается сразу в Telegram, без сайта t.me. Для пересылки (если у получателя t.me не заблокирован): <span style="user-select:all;word-break:break-all">' + s.share.replace(/</g, '&lt;') + '</span>' : '';
+  prob.style.display = s.enabled && s.problem ? 'block' : 'none';
+  prob.textContent = s.problem || '';
+  ['port', 'sni', 'user'].forEach(n => { const el = $('#' + proto + '-' + n); if (el && s[n] && !el.matches(':focus')) el.value = s[n]; });
+  if (proto === 'web') {
+    if (s.http_addr && !$('#web-http').matches(':focus')) $('#web-http').value = s.http_addr;
+    if (!$('#web-tls').matches(':focus')) $('#web-tls').value = s.tls_port || '';
+    $('#web-listen').textContent = 'Вход: HTTP ' + (s.http_addr || '—') + (s.tls_port ? ', HTTPS :' + s.tls_port : '');
+  }
+  if (proto === 'socks5') {
+    const c = $('#socks5-calls');
+    c.className = 'status ' + (s.calls ? 'ok' : 'err');
+    c.textContent = s.calls ? '● узел ' + s.upstream + ' — звонки идут через него' : '● узел не задан: звонки работать не будут';
+    if (s.upstream && !$('#node-host').matches(':focus')) { const i = s.upstream.lastIndexOf(':'); $('#node-host').value = s.upstream.slice(0, i).replace(/^\[|\]$/g, ''); $('#node-port').value = s.upstream.slice(i + 1); }
+  }
+}
+
+function renderAll(data) { Object.keys(data).forEach(p => { if (p === 'localIp') renderLocalIp(data[p]); else if (p === 'wg') renderWg(data[p]); else if ($('[data-switch="' + p + '"]')) renderProto(p, data[p]); }); }
+function loadState() { api('state', {method: 'GET'}).then(renderAll).catch(() => {}); }
+
+$$('.switch[data-switch]').forEach(sw => sw.addEventListener('click', () => {
+  const proto = sw.dataset.switch, on = !sw.classList.contains('on');
+  const fields = $('#' + proto + '-fields');
+  if (on && fields && !$('#' + proto + '-link').textContent && !fields.classList.contains('show')) {
+    fields.classList.add('show'); return; // сначала порт и прочее, включение — кнопкой «Применить»
+  }
+  doToggle(proto, on, {});
+}));
+
+$$('[data-edit]').forEach(b => b.addEventListener('click', () => $('#' + b.dataset.edit + '-fields').classList.toggle('show')));
+$('#web-ports-btn').addEventListener('click', () => $('#web-ports').classList.toggle('show'));
+$('#web-listen-apply').addEventListener('click', () => {
+  const b = $('#web-listen-apply'); b.disabled = true;
+  api('web-listen', {method: 'POST', body: JSON.stringify({http_addr: $('#web-http').value.trim(), tls_port: $('#web-tls').value.trim()})})
+    .then(s => { renderProto('web', s); $('#web-ports').classList.remove('show'); })
+    .catch(err => alert('Не применено: ' + err.message))
+    .finally(() => { b.disabled = false; });
+});
+
+function renderLocalIp(l) {
+  if (!l) return;
+  $('#localip-card').style.display = l.available ? 'block' : 'none';
+  $('#localip-ip').textContent = l.ip || '';
+  const sw = $('#localip-switch'); sw.classList.remove('pending'); sw.classList.toggle('on', !!l.active);
+}
+$('#localip-switch').addEventListener('click', () => {
+  const sw = $('#localip-switch'); sw.classList.add('pending');
+  api('local-ip', {method: 'POST', body: JSON.stringify({on: !sw.classList.contains('on')})})
+    .then(renderAll).catch(() => sw.classList.remove('pending'));
+});
+
+const val = (p, n) => { const el = $('#' + p + '-' + n); return el ? el.value.trim() : ''; };
+$$('[data-apply]').forEach(b => b.addEventListener('click', () => {
+  const p = b.dataset.apply;
+  doToggle(p, true, {port: val(p, 'port'), sni: val(p, 'sni'), user: val(p, 'user'), pass: val(p, 'pass')});
+}));
+
+function doToggle(proto, on, extra) {
+  const sw = $('[data-switch="' + proto + '"]');
+  sw.classList.add('pending');
+  setStatus(proto, 'pending', on ? 'включение…' : 'выключение…');
+  api('toggle', {method: 'POST', body: JSON.stringify(Object.assign({proto, on}, extra))})
+    .then(s => renderProto(proto, s))
+    .catch(err => { sw.classList.remove('pending'); setStatus(proto, 'err', 'ошибка: ' + err.message); });
+}
+
+$$('[data-regen]').forEach(b => b.addEventListener('click', () => {
+  const p = b.dataset.regen;
+  if (!confirm('Старая ссылка перестанет работать у всех, кто её добавил. Продолжить?')) return;
+  b.disabled = true;
+  setStatus(p, 'pending', 'перевыпуск…');
+  api('regen', {method: 'POST', body: JSON.stringify({proto: p})})
+    .then(s => renderProto(p, s)).catch(err => setStatus(p, 'err', 'ошибка: ' + err.message))
+    .finally(() => { b.disabled = false; });
+}));
+
+function showPage(name) {
+  $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.page === name));
+  $$('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + name));
+}
+$$('.tab').forEach(t => t.addEventListener('click', () => { history.replaceState(null, '', '#' + t.dataset.page); showPage(t.dataset.page); }));
+showPage(location.hash === '#calls' ? 'calls' : 'proxy');
+function nodeLink() {
+  const l = $('#upstream-link').value.trim();
+  if (l) return l;
+  const h = $('#node-host').value.trim(), p = $('#node-port').value.trim(), k = $('#node-pass').value.trim();
+  if (!k) throw new Error('впишите пароль (ключ) узла — или вставьте ссылку ss://');
+  if (!h || !p) throw new Error('заполните адрес и порт — или вставьте ссылку ss://');
+  const host = h.includes(':') && !h.startsWith('[') ? '[' + h + ']' : h;
+  return 'ss://' + encodeURIComponent($('#node-method').value) + ':' + encodeURIComponent(k) + '@' + host + ':' + p + '#node';
+}
+$('#upstream-clear').addEventListener('click', () => {
+  if (!confirm('Убрать внешний узел? Звонки перестанут работать.')) return;
+  api('upstream', {method: 'POST', body: JSON.stringify({link: ''})}).then(s => { renderProto('socks5', s); loadDiag(); loadState(); });
+});
+$('#upstream-save').addEventListener('click', () => {
+  const b = $('#upstream-save'), c = $('#socks5-calls');
+  b.disabled = true;
+  let link;
+  try { link = nodeLink(); } catch (e) { c.className = 'status err'; c.textContent = e.message; b.disabled = false; return; }
+  api('upstream', {method: 'POST', body: JSON.stringify({link})})
+    .then(s => { ['#upstream-link', '#node-pass'].forEach(x => $(x).value = ''); renderProto('socks5', s); loadDiag(); loadState(); })
+    .catch(err => { c.className = 'status err'; c.textContent = 'ошибка: ' + err.message; })
+    .finally(() => { b.disabled = false; });
+});
+
+function legacyCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta); return ok;
+}
+function copyText(t) {
+  if (window.isSecureContext && navigator.clipboard) return navigator.clipboard.writeText(t).then(() => true).catch(() => legacyCopy(t));
+  return Promise.resolve(legacyCopy(t));
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-copy]');
+  if (!b) return;
+  const t = $('#' + b.dataset.copy).textContent;
+  if (!t) return;
+  const orig = b.textContent;
+  copyText(t).then(ok => { b.textContent = ok ? 'Скопировано' : 'Не удалось'; setTimeout(() => { b.textContent = orig; }, 1200); });
+});
+
+function loadDiag() {
+  api('status', {method: 'GET'}).then(s => {
+    const cf = $('#diag-cf');
+    if (!s.cfWorkerHost) { cf.className = 'status off'; cf.textContent = 'не задан'; }
+    else { cf.className = 'status ' + (s.cfWorkerOk ? 'ok' : 'err'); cf.textContent = s.cfWorkerOk ? '● доступен' : '● недоступен'; }
+    const row = $('#diag-up-row'), up = $('#diag-up');
+    if (s.upstreamOk === undefined || s.upstreamOk === null) { row.style.display = 'none'; }
+    else { row.style.display = 'flex'; up.className = 'status ' + (s.upstreamOk ? 'ok' : 'err'); up.textContent = s.upstreamOk ? '● доступен' : '● недоступен'; }
+  }).catch(() => {});
+}
+
+
+function esc(t) { return String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderWg(s) {
+  const sw = $('#wg-switch'); sw.classList.remove('pending'); sw.classList.toggle('on', !!s.enabled);
+  const st = $('#wg-status'), pr = $('#wg-problem');
+  if (!s.enabled) { st.className = 'status off'; st.textContent = 'выключен'; }
+  else if (s.problem) { st.className = 'status err'; st.textContent = '● включён, но не работает'; }
+  else { st.className = 'status ok'; st.textContent = '● работает · ' + s.endpoint + (s.calls ? ' · звонки через выход' : ' · без выхода: звонков не будет'); }
+  pr.style.display = s.enabled && s.problem ? 'block' : 'none'; pr.textContent = s.problem || '';
+  if (s.port && !$('#wg-port').matches(':focus')) $('#wg-port').value = s.port;
+  $('#wg-add-row').style.display = s.enabled ? 'flex' : 'none';
+  const box = $('#wg-peers'); box.innerHTML = '';
+  if (!s.enabled) return;
+  (s.peers || []).forEach(p => {
+    const d = document.createElement('div'); d.className = 'peer';
+    d.innerHTML = '<div class="peer-head"><b>' + esc(p.name) + '</b><span style="color:var(--text-dim)">' + esc(p.ip) + '</span></div>' +
+      '<div class="link-row"><div class="link-col"><pre>' + esc(p.conf) + '</pre></div><img class="qr show" alt="QR" src="' + p.qr + '"></div>' +
+      '<div class="row" style="margin-top:8px"><a class="btn ghost" download="' + esc(p.name) + '.conf" href="data:text/plain;charset=utf-8,' + encodeURIComponent(p.conf) + '">Скачать .conf</a>' +
+      '<button class="btn ghost" data-wgdel="' + esc(p.name) + '">Удалить</button></div>';
+    box.appendChild(d);
+  });
+}
+function wgCall(path, body) {
+  return api(path, {method: 'POST', body: JSON.stringify(body)}).then(renderWg)
+    .catch(err => { const st = $('#wg-status'); st.className = 'status err'; st.textContent = 'ошибка: ' + err.message; $('#wg-switch').classList.remove('pending'); });
+}
+$('#wg-switch').addEventListener('click', () => {
+  const sw = $('#wg-switch'), on = !sw.classList.contains('on');
+  if (on && !$('#wg-port').value) { $('#wg-fields').classList.add('show'); return; }
+  sw.classList.add('pending'); wgCall('toggle', {proto: 'wg', on, port: $('#wg-port').value.trim()});
+});
+$('#wg-apply').addEventListener('click', () => { $('#wg-fields').classList.remove('show'); $('#wg-switch').classList.add('pending'); wgCall('toggle', {proto: 'wg', on: true, port: $('#wg-port').value.trim()}); });
+let invTimer = null;
+$('#wg-join').addEventListener('click', () => {
+  api('wg-invite', {method: 'POST', body: '{}'}).then(d => {
+    $('#wg-invite').style.display = 'block'; $('#wg-inv-qr').src = d.qr; $('#wg-inv-url').textContent = d.url;
+    clearInterval(invTimer);
+    const tick = () => { const left = d.expires - Math.floor(Date.now() / 1000);
+      if (left <= 0) { $('#wg-invite').style.display = 'none'; clearInterval(invTimer); return; }
+      $('#wg-inv-left').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'); };
+    tick(); invTimer = setInterval(() => { tick(); }, 1000);
+    const poll = setInterval(() => { if ($('#wg-invite').style.display === 'none') { clearInterval(poll); return; } api('state', {method: 'GET'}).then(s => renderWg(s.wg)).catch(() => {}); }, 4000);
+  }).catch(err => { const st = $('#wg-status'); st.className = 'status err'; st.textContent = 'ошибка: ' + err.message; });
+});
+$('#wg-edit').addEventListener('click', () => $('#wg-fields').classList.toggle('show'));
+$('#wg-add').addEventListener('click', () => { const n = $('#wg-name').value.trim(); if (!n) return; $('#wg-name').value = ''; wgCall('wg-peer', {name: n}); });
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-wgdel]');
+  if (!b) return;
+  if (!confirm('Удалить устройство «' + b.dataset.wgdel + '»? Его профиль перестанет работать.')) return;
+  wgCall('wg-peer', {name: b.dataset.wgdel, delete: true});
+});
+
+
+const TG_NETS = [['91.105.192.0','255.255.254.0'],['91.108.4.0','255.255.252.0'],['91.108.8.0','255.255.252.0'],['91.108.12.0','255.255.252.0'],
+  ['91.108.16.0','255.255.252.0'],['91.108.20.0','255.255.252.0'],['91.108.56.0','255.255.252.0'],['95.161.64.0','255.255.240.0'],
+  ['149.154.160.0','255.255.240.0'],['185.76.151.0','255.255.255.0']];
+(function knTable() {
+  const t = $('#kn-table');
+  TG_NETS.forEach(n => {
+    const bits = n[1].split('.').reduce((a, o) => a + (+o).toString(2).split('1').length - 1, 0);
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td><code>' + n[0] + '</code></td><td><code>' + n[1] + '/' + bits + '</code></td>';
+    t.appendChild(tr);
+  });
+})();
+
+renderAll(INITIAL);
+loadDiag();
+setInterval(loadDiag, 20000);
+setInterval(loadState, 15000);
+</script>
+</body>
+</html>

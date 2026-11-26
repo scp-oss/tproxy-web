@@ -1,0 +1,33 @@
+# tproxy-web: один контейнер. Всё остальное (какие модули включены, порты,
+# секреты) настраивается в панели и хранится в томе config.
+#
+#   cp .env.example .env   # HOSTNAME_ARG, CF_WORKER
+#   docker compose up -d
+#   docker compose logs | head -20   # адрес панели, логин и пароль
+services:
+  tproxy:
+    image: scposs/tproxy-web:${TAG:-2}
+    build: .
+    container_name: tproxy-web
+    network_mode: host          # модули открывают свои порты сами, без публикации в compose
+    restart: unless-stopped
+    init: false                 # tini уже внутри образа
+    environment:
+      HOSTNAME_ARG: ${HOSTNAME_ARG:?домен, на который приходят клиенты}
+      CF_WORKER: ${CF_WORKER:-}
+      CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
+      TGWS_ONLY_WORKER: ${TGWS_ONLY_WORKER:-0}
+      PANEL_ADDR: ${PANEL_ADDR:-0.0.0.0:7655}
+      # вход WEB-прокси: начальные значения, дальше -- в панели (WEB → «Порты входа»)
+      FRONT_ADDR: ${FRONT_ADDR:-127.0.0.1:19443}
+      FRONT_TLS_ADDR: ${FRONT_TLS_ADDR:-}
+      LOCAL_IP: ${LOCAL_IP:-}
+    volumes:
+      - config:/config
+      - ./certs:/certs:ro
+    cap_drop: [NET_RAW, MKNOD, AUDIT_WRITE, SETFCAP, SYS_CHROOT]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  config:
+    name: ${CONFIG_VOLUME:-tproxy-web_config}

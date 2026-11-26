@@ -1,0 +1,25 @@
+{
+  "public_hostname": "__HOSTNAME__",
+  "base_path": "__BASE_PATH__",
+  "listen": "127.0.0.1:18080",
+  "admin_listen": "127.0.0.1:18081",
+  "public_upstream": "http://127.0.0.1:13000",
+  "token_key_file": "/config/token.key",
+  "profiles_file": "/config/profiles.json",
+  "enable_pprof": false,
+  "limits": {
+    "max_sessions_global": 128,
+    "max_streams_global": 4096,
+    "max_sessions_per_ip": 0,
+    "max_bootstraps_per_ip": 0
+  },
+  "timeouts": {
+    "backend_dial": "5s",
+    "long_poll": "25s",
+    "reconnect_grace": "10m",
+    "bootstrap_lifetime": "2m",
+    "read_header": "10s",
+    "idle": "75s",
+    "shutdown": "15s"
+  }
+}

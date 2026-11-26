@@ -1,0 +1,56 @@
+# УДАЛЁННЫЙ РЕЖИМ: на этом сервере NPM нет, TLS для клиентов держит главный NPM
+# на другом сервере и проксирует сюда.
+#
+#   клиент ─https─▶ главный NPM ─https (самоподписанный)─▶ :18443 gateway (этот сервер)
+#                                                           │ 127.0.0.1:18080
+#                                                           ▼
+#                                                         relay ─▶ MTProxy 127.0.0.1:2398
+#                                                           └─ без секрета ─▶ 127.0.0.1:13000 прикрытие
+#
+# Relay принимает запросы только с 127.0.0.1, поэтому прямой доступ главного NPM
+# к relay невозможен — его принимает gateway (nginx) и пересылает на loopback.
+# Все контейнеры живут в сетевом пространстве gateway; наружу открыт только 18443 (внутри контейнера это 8443),
+# и gateway пускает на него только IP главного NPM.
+
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Единственный порт на хосте. Внутренние 18080/18081/13000/2398/8888 живут
+      # в сетевом пространстве gateway и с портами хоста не пересекаются.
+      - "${GATEWAY_PORT:-18443}:8443"
+    environment:
+      NPM_IP: ${NPM_IP:?укажите NPM_IP в .env}
+    volumes:
+      - ./remote/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./remote/certs:/etc/nginx/certs:ro
+      - ./site/html:/usr/share/nginx/html:ro
+
+  mtproxy:
+    build: ./mtproxy
+    network_mode: "service:gateway"
+    init: true
+    restart: unless-stopped
+    environment:
+      MTPROXY_SECRET: ${MTPROXY_SECRET:?}
+      PUBLIC_IP: ${PUBLIC_IP:?}
+      MTPROXY_WORKERS: ${MTPROXY_WORKERS:-1}
+      MTPROXY_MAX_CONNECTIONS: ${MTPROXY_MAX_CONNECTIONS:-4096}
+    ulimits:
+      nofile: 1048576
+    depends_on: [gateway]
+
+  relay:
+    build:
+      context: ./relay
+      args:
+        TPROXY_REF: ${TPROXY_REF:-master}
+    network_mode: "service:gateway"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./config:/config:ro
+    depends_on: [gateway, mtproxy]

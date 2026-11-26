@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NodeSentry — Вход в панель мониторинга</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161c24;
+    --panel-2: #1c242e;
+    --border: #2a333f;
+    --text: #d6e0ea;
+    --text-dim: #7c8a9a;
+    --accent: #3b9dff;
+    --accent-dim: #2a5f8f;
+    --ok: #3ecf8e;
+    --warn: #e8b339;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: #fff;
+  }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text-dim);
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 20px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+  main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .bg-preview {
+    position: absolute;
+    inset: 0;
+    filter: blur(6px) brightness(0.4);
+    pointer-events: none;
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 16px;
+    padding: 24px;
+  }
+  .bg-side { background: var(--panel); border-radius: 10px; border: 1px solid var(--border); padding: 16px; }
+  .bg-side .item { height: 14px; background: var(--panel-2); border-radius: 4px; margin-bottom: 14px; width: 80%; }
+  .bg-main { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; align-content: start; }
+  .bg-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; height: 120px; }
+  .bg-card .label { height: 10px; width: 60%; background: var(--panel-2); border-radius: 4px; margin-bottom: 10px; }
+  .bg-card .graph { height: 60px; background: linear-gradient(180deg, rgba(59,157,255,0.25), transparent); border-radius: 4px; }
+
+  .login-box {
+    position: relative;
+    z-index: 2;
+    width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 36px 32px 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .login-box h1 { font-size: 19px; font-weight: 600; margin-bottom: 4px; }
+  .login-box .sub { font-size: 13px; color: var(--text-dim); margin-bottom: 26px; }
+  label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 6px; margin-top: 16px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 10px 12px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px;
+    outline: none; transition: border-color .15s;
+  }
+  input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
+  .row { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; font-size: 12.5px; }
+  .row a { color: var(--accent); text-decoration: none; }
+  .checkbox { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+  button.submit {
+    width: 100%; margin-top: 22px; padding: 11px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 14.5px; font-weight: 600; cursor: pointer;
+    transition: background .15s;
+  }
+  button.submit:hover { background: #2d8ae8; }
+  .divider { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; color: var(--text-dim); font-size: 11.5px; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  button.sso {
+    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: transparent; color: var(--text); font-size: 13.5px; cursor: pointer;
+  }
+  .error-msg {
+    display: none;
+    margin-top: 16px; padding: 10px 12px; border-radius: 8px;
+    background: rgba(232,179,57,0.12); border: 1px solid rgba(232,179,57,0.3);
+    color: var(--warn); font-size: 12.5px;
+  }
+  footer {
+    text-align: center; padding: 16px; font-size: 11.5px; color: var(--text-dim);
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--text-dim); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">NS</div>
+    NodeSentry
+  </div>
+  <div class="status-pill"><span class="dot"></span> Все системы работают штатно</div>
+</header>
+
+<main>
+  <div class="bg-preview">
+    <div class="bg-side">
+      <div class="item" style="width:50%"></div>
+      <div class="item"></div>
+      <div class="item" style="width:65%"></div>
+      <div class="item"></div>
+      <div class="item" style="width:70%"></div>
+      <div class="item" style="width:55%"></div>
+    </div>
+    <div class="bg-main">
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+      <div class="bg-card"><div class="label"></div><div class="graph"></div></div>
+    </div>
+  </div>
+
+  <div class="login-box">
+    <h1>Вход в панель</h1>
+    <div class="sub">NodeSentry Monitoring &middot; закрытая сеть</div>
+
+    <form id="loginForm" autocomplete="off">
+      <label for="email">Рабочий e-mail</label>
+      <input type="text" id="email" name="email" placeholder="name@company.local" autocomplete="username">
+
+      <label for="pw">Пароль</label>
+      <input type="password" id="pw" name="password" placeholder="••••••••" autocomplete="current-password">
+
+      <div class="row">
+        <div class="checkbox"><input type="checkbox" id="remember"> <label for="remember" style="margin:0;display:inline">Запомнить меня</label></div>
+        <a href="#">Забыли пароль?</a>
+      </div>
+
+      <button type="submit" class="submit">Войти</button>
+
+      <div class="error-msg" id="errMsg">Не удалось подключиться к серверу авторизации. Попробуйте позже или обратитесь к администратору.</div>
+    </form>
+
+    <div class="divider">или</div>
+    <button class="sso" type="button" onclick="document.getElementById('errMsg').style.display='block'">Войти через SSO</button>
+  </div>
+</main>
+
+<footer>
+  NodeSentry Ops &middot; v4.2.1 &middot; <a href="#">Статус системы</a> &middot; <a href="#">Поддержка</a> &middot; © 2026
+</footer>
+
+<script>
+document.getElementById('loginForm').addEventListener('submit', function(e){
+  e.preventDefault();
+  document.getElementById('errMsg').style.display = 'block';
+});
+</script>
+
+</body>
+</html>
