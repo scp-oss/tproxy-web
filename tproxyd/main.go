@@ -479,6 +479,11 @@ func tgwsCmd(args ...string) (*exec.Cmd, error) {
 	if onlyWorker {
 		all = append(all, "--pool-size", "0", "--no-cfproxy")
 	}
+	// TGWS_NO_H2=1 -- к Cloudflare/Worker по HTTP/1.1 (без HTTP/2-мультиплексирования медиа):
+	// у части провайдеров HTTP/2 к домену Worker «зависает» после первых байт, HTTP/1.1 проходит
+	if envDefault("TGWS_NO_H2", "0") == "1" {
+		all = append(all, "--no-h2")
+	}
 	cmd := exec.Command(tgwsPython, all...)
 	cmd.Dir = tgwsDir
 	cmd.Env = append(os.Environ(), "TG_WS_PROXY_CF_WORKER_AUTH="+workerAuth, "PYTHONUNBUFFERED=1")

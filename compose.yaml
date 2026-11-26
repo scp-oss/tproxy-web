@@ -17,6 +17,7 @@ services:
       CF_WORKER: ${CF_WORKER:-}
       CF_WORKER_AUTH: ${CF_WORKER_AUTH:-}
       TGWS_ONLY_WORKER: ${TGWS_ONLY_WORKER:-0}
+      TGWS_NO_H2: ${TGWS_NO_H2:-0}
       PANEL_ADDR: ${PANEL_ADDR:-0.0.0.0:7655}
       # вход WEB-прокси: начальные значения, дальше -- в панели (WEB → «Порты входа»)
       FRONT_ADDR: ${FRONT_ADDR:-127.0.0.1:19443}
